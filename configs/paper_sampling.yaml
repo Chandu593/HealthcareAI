@@ -1,0 +1,16 @@
+# Negative-result section on the STRONG features: hospital-wise random under/over-sampling vs plain LightGBM
+# (which already has a validation-selected scale_pos_weight option). Ratio chosen on validation AUPRC only.
+#   python run_paper.py --config configs/paper_sampling.yaml --reuse-phase1to3 --tasks mortality --run-id sampling_check
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  tasks:
+    mortality: [no_apache_scores]
+    sepsis: []
+  arms: {logreg_central: false, lightgbm_central: true, lightgbm_sampling: true, mlp_central: false, fedavg_mlp: false, fedavg_graph: false}
+  seeds: [42]

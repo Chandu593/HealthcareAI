@@ -1,0 +1,20 @@
+# Tiny, fast paper-track configuration for smoke runs (mock data or a handful of hospitals).
+run:
+  mode: debug
+
+cohort:
+  patient_subset: 40
+
+federated:
+  mode: subset
+  hospitals: []
+
+paper:
+  features: {min_vocab_patients: 2, top_labs: 10, top_treatments: 10, top_diagnoses: 10, top_admission_drugs: 10, top_medications: 10, top_infusions: 5}
+  sequence: {n_labs: 4}
+  seeds: [42]
+  lightgbm: {n_trials: 2, n_estimators: 100, early_stopping_rounds: 10}
+  neural: {central_epochs: 5, hidden: [32, 16], emb_dim: 8, seq_hidden: 8, min_hospital_n_for_local_stats: 10}
+  federated: {rounds: 4, local_epochs: 1}
+  graph: {k: 3, cosine_threshold: 0.0, n_clusters: 2, hidden: 8, rounds: 4}
+  evaluation: {bootstrap_n: 50}

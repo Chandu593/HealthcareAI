@@ -1,0 +1,495 @@
+# Base configuration. Mode-specific configs (debug/subset/full) override
+# only what they need to change -- see src/utils/config.py for merge rules.
+#
+# Every parameter here is intentionally explicit (Section 30: no hardcoded
+# research parameters buried in code).
+
+data:
+  root: ${EICU_DATA_ROOT}
+  chunksize: 200000
+
+run:
+  mode: base        # overridden by debug.yaml / subset.yaml / full.yaml
+  seed: 42
+  output_dir: outputs
+  log_dir: outputs/logs
+  cache_dir: cache
+  checkpoint_dir: checkpoints
+
+hardware:
+  device: auto       # auto | cpu | cuda
+
+federated:
+  client_key: hospitalid
+  mode: subset        # subset | all
+  hospitals: []        # populated by debug/subset config; [] + mode=all -> all eligible hospitals
+  rounds: 20           # LEGACY, pre-Phase-12 -- superseded by federated.n_rounds below (kept, not
+                        # deleted, only because tests/unit/test_config.py already asserts its raw
+                        # presence; Phase 12 reads n_rounds, never this key).
+  local_epochs: 1       # LEGACY, pre-Phase-12 -- superseded by training.local_epochs. Same
+                        # kept-not-deleted reasoning as `rounds` above.
+  client_fraction: 1.0  # NOT YET USED -- every eligible hospital participates in every round
+                        # today (no partial-client-fraction sampling implemented). Left as a
+                        # documented future knob rather than removed.
+
+  # BUG FOUND + FIXED 2026-09-10 (while adding the ablation framework's
+  # `algorithm` meaning below): this file used to declare TWO separate
+  # top-level `federated:` mappings (this one, plus a second one further
+  # down carrying n_rounds/reuse_existing_local_checkpoints_for_round_1).
+  # YAML has no concept of "merge these" for two mappings under the same
+  # key at the same level -- PyYAML's loader silently kept only the
+  # SECOND one, meaning `client_key`/`mode`/`hospitals`/`algorithm`/
+  # `rounds`/`local_epochs`/`client_fraction` were ALL silently dropped
+  # every time base.yaml was loaded on its own. This was harmless in
+  # practice only by accident: every real mode config (debug/subset/
+  # full.yaml) already re-specifies `mode`/`hospitals`/`rounds`/
+  # `local_epochs` on top via deep-merge (which re-adds them), and
+  # nothing in the codebase ever read `client_key`/`algorithm`/
+  # `client_fraction` (confirmed by grep) -- so no observable behavior
+  # ever depended on the dropped values. Still a real landmine (a future
+  # config or code path relying on any of those three would have
+  # silently gotten `None`/a KeyError-via-default instead of the
+  # documented value), and it's exactly the kind of thing this project's
+  # own history has repeatedly caught (see `training:` stanza and
+  # `fusion.output_dim` stale-value fixes in IMPLEMENTATION_TRACKER.md).
+  # Consolidated into this single block; `n_rounds` and
+  # `reuse_existing_local_checkpoints_for_round_1` now live here too,
+  # see below.
+
+  algorithm: fedavg    # fedavg | fedproto. fedavg is the only one implemented
+                        # (src/training/fedavg.py's fedavg_aggregate(), Phase 12) -- this key was
+                        # declared back in early planning but never actually consulted by any code
+                        # until now. `fedproto` is INTENTIONALLY NOT IMPLEMENTED YET (confirmed
+                        # with the user 2026-09-10, ablation-framework decisions #5/#6): selecting
+                        # it raises NotImplementedError with a clear message rather than silently
+                        # falling back to fedavg -- see run_phase12_fedavg()'s dispatch. The config
+                        # schema and dispatch point are built now specifically so a future FedProto
+                        # implementation is a new branch, not a pipeline rewrite.
+
+  n_rounds: 3                    # total FedAvg rounds. DECIDED WITH USER 2026-09-01. Each round
+                                  # costs one full local-training pass across every hospital (see
+                                  # training.local_epochs) -- confirmed ~37 min/round on the user's
+                                  # real 208-hospital dataset. NOT the same concept as
+                                  # training.local_epochs (epochs WITHIN one hospital's one round) --
+                                  # n_rounds is how many times the whole federated cycle (local
+                                  # train -> aggregate -> redistribute) repeats.
+  reuse_existing_local_checkpoints_for_round_1: true
+                                  # DECIDED WITH USER 2026-09-01: round 1 reuses the user's own
+                                  # already-completed, already quality-checked real Phase 11 run
+                                  # (checkpoints/phase11_local/) instead of re-training from scratch
+                                  # -- saves ~37 min. Falls back to a fresh round 1 automatically
+                                  # (with a clear warning, not a crash) if no usable checkpoints are
+                                  # found there.
+
+cohort:
+  patient_subset: null     # null = no cap; int = sample N patients per hospital
+  hospital_subset: null    # overridden by federated.hospitals in practice
+
+  mortality:
+    label_source: hospitaldischargestatus   # patient.hospitaldischargestatus == "Expired" (NOT unitdischargestatus -- see mortality_label.py)
+
+  sepsis:
+    # DUAL-COHORT design, locked in 2026-08-08 per user decision -- see
+    # docs/sepsis_label_methodology.md. Both cohorts are always built;
+    # `strict` is the primary analysis, `broad` is the sensitivity
+    # analysis. Neither is claimed to be a validated Sepsis-3
+    # implementation -- the project's reference papers don't specify
+    # extraction logic at this resolution.
+    infection:
+      antibiotic_tables: [medication, medication_imputed, medication_imputed1]  # unioned + deduped, see infection_proxy.combine_medication_sources
+      corroboration_window_minutes: 1440      # strict cohort: max |antibiotic_start - culture_offset|
+      lookback_minutes: 1440                  # allow antibiotic starts up to 24h pre-ICU-admission
+      lookahead_minutes: 2880                 # ...and up to 48h into the stay
+    organ_dysfunction:
+      sofa_like_threshold: 2                  # applied to an ABSOLUTE single-window score, not a delta -- see sofa_like_scoring.py
+      observation_window_minutes: 1440        # first 24h, worst-value-in-window
+      components: [respiratory, coagulation, liver, cardiovascular, cns, renal]
+      renal_urine_output_available: false     # no intakeOutput table -- renal uses creatinine only
+      cardiovascular_map_available: false     # no vitalPeriodic table -- cardio uses vasopressor PRESENCE only (flat 2pt, no dose tiering)
+
+temporal:
+  time_bin_minutes: 240      # 4-hour windows, matching FRL-paper convention
+  max_sequence_length: 48
+  prediction_horizon_offset_minutes: 0   # features must end at/before this offset relative to label event
+
+modalities:
+  timeseries:
+    enabled: true
+    source_tables: [lab, medication, infusionDrug]   # NOT vitalPeriodic -- unavailable, see schema_registry.py
+    lab_features: [platelet, bilirubin, creatinine, fibrinogen, "PT - INR", pH]  # substring match against labname; auto-falls-back to top-frequency labnames if none match this cohort's data
+    encoder: lstm                    # lstm | rnn | gru | transformer. FILLED IN 2026-09-06 (user
+                              # request) -- this key already existed as an unused stub (nothing
+                              # in the code ever read it) before this change; now it actually
+                              # selects the architecture. lstm is the default and PRESERVES
+                              # existing behavior byte-for-byte -- output always goes to
+                              # timeseries_embeddings.npz. Any other value writes to
+                              # timeseries_embeddings_{encoder}.npz instead, NEVER touching
+                              # timeseries_embeddings.npz, so Phase 7+ are unaffected unless
+                              # encoder is deliberately changed AND the pipeline is run
+                              # end-to-end in the same invocation (see docs/timeseries_modality.md).
+    hidden_dim: 128
+    num_layers: 2
+    dropout: 0.2
+    lstm_inference_batch_size: 512  # patients per forward pass for WHICHEVER encoder is
+                                     # selected above (name kept as-is for backward
+                                     # compatibility with existing configs, despite now applying
+                                     # to rnn/gru/transformer too) -- see src/utils/batching.py;
+                                     # auto-shrinks on OOM, this is just the starting point
+    transformer_num_heads: 4          # only used when encoder: transformer
+    transformer_dim_feedforward: 256  # only used when encoder: transformer
+
+  tabular:
+    enabled: true
+    source_tables: [patient, apachePredVar, diagnosis]
+    encoder: autoencoder     # autoencoder | mlp. FILLED IN 2026-09-06 (user request) -- this
+                             # key already existed as an unused stub (already commented
+                             # "autoencoder | mlp", nothing in the code ever read it) before
+                             # this change; now it actually selects the architecture.
+                             # autoencoder is the default and PRESERVES existing behavior
+                             # byte-for-byte -- output always goes to tabular_embeddings.npz.
+                             # mlp writes to tabular_embeddings_mlp.npz instead, NEVER touching
+                             # tabular_embeddings.npz -- see docs/tabular_modality.md.
+    hidden_dim: 128
+    embedding_dim: 64
+    dropout: 0.1
+    top_k_categorical: 10               # default vocabulary size per categorical feature -- see feature_engineering.determine_categorical_vocabulary
+    top_k_categorical_overrides:        # per-column overrides for higher-cardinality fields. FIXED 2026-08-2x: vocabularies are now determined from the full cohort / all diagnosis shards (see docs/tabular_modality.md), not a 10-hospital sample -- these overrides are a starting point informed by which columns hit the top_k=10 ceiling on the real 199,108-patient run (apacheadmissiondx=10, hospitaladmitsource=10, diagnosis=10 all saturated), NOT confirmed true category counts from eICU's data dictionary. Revisit with real cardinality figures if available.
+      apacheadmissiondx: 30
+      hospitaladmitsource: 15
+      diagnosis: 20
+    diagnosis_lookback_minutes: 1440    # diagnoses recorded up to 24h BEFORE admission are still admission-context
+    diagnosis_cutoff_minutes: 1440      # diagnoses recorded more than 24h INTO the stay are excluded (leakage: later clinical knowledge)
+    inference_batch_size: 4096          # patients per autoencoder forward pass -- see src/utils/batching.py; auto-shrinks on OOM
+
+  text:
+    enabled: false            # default OFF -- eICU has no free-text clinical notes (see docs/text_modality_decision.md)
+    pseudo_text_source: diagnosisstring   # used only if enabled: true
+    model_name: prajjwal1/bert-tiny        # a genuine MiniBERT-scale model
+    max_sequence_length: 64
+
+fusion:
+  type: concatenation
+  output_dim: 192   # DESCRIPTIVE, not enforced: lstm_dim (128) + autoencoder_dim (64). CORRECTED
+                    # 2026-08-25 (was 256, stale from early planning before text/Phase 6 was
+                    # permanently locked out -- see docs/text_modality_decision.md). Option A
+                    # (locked 2026-08-25): pure concatenation, no learned projection layer yet --
+                    # there's no training signal to justify committing to a specific projected
+                    # width before training exists. run_phase7_multimodal_fusion() warns (not
+                    # errors) if this drifts from the real lstm_dim+autoencoder_dim sum.
+
+graph:
+  method: knn         # knn | cosine_threshold
+  k: 5
+  metric: cosine      # only 'cosine' implemented so far
+  cosine_threshold: 0.6
+  max_nodes_full_similarity: 2000   # DESCRIPTIVE THRESHOLD, EXACT EITHER SIDE (Option B, locked
+                                     # 2026-08-26, confirmed with user): above this many patients in
+                                     # a single hospital, similarity is computed in row-chunks to
+                                     # bound peak memory -- NOT switched to approximate/ANN search.
+                                     # Chosen over adding an ANN dependency (e.g. faiss) because
+                                     # even the largest real hospitals here are a few thousand
+                                     # patients (a 5,000x5,000 float32 similarity matrix is ~100MB,
+                                     # trivial), and exact results are more defensible for a
+                                     # research write-up than an approximation needing its own
+                                     # recall/error justification. See docs/patient_graph_construction.md.
+
+gnn:
+  type: graphsage      # graphsage | gat | gcn
+  hidden_dim: 128
+  layers: 2
+  dropout: 0.2
+  learning_rate: 0.001   # SUPERSEDED as of Phase 11 (2026-08-30) -- found stubbed here since
+                          # before any training loop existed. Phase 11 trains LSTM+autoencoder+GNN+
+                          # heads JOINTLY per hospital with ONE composite optimizer over all four
+                          # components (see training.learning_rate below), not a GNN-only one, so a
+                          # GNN-specific learning rate no longer makes architectural sense. Left here
+                          # rather than deleted, in case a future phase reintroduces per-component
+                          # optimizers -- but training.learning_rate is what Phase 11 actually reads.
+  weight_decay: 0.0001    # SUPERSEDED as of Phase 11 -- see learning_rate's note above; training.weight_decay is what's actually used.
+
+multitask:
+  mortality_weight: 1.0
+  sepsis_weight: 1.0
+  loss: weighted_bce    # weighted_bce | focal
+  sepsis_cohort: broad  # broad | strict -- which of Phase 3's dual-cohort sepsis labels
+                        # (sepsis_broad / sepsis_strict in cohort_reports/sepsis_labels.csv)
+                        # the sepsis head trains/predicts against. DECIDED 2026-08-28: single
+                        # configurable head, not 3 separate heads -- test_strict_is_always_
+                        # subset_of_broad (tests/unit/test_infection_proxy.py) PROVES
+                        # sepsis_strict is always a subset of sepsis_broad (same organ-
+                        # dysfunction criterion, strict_infection ⊆ broad_infection by
+                        # construction), so a separate strict head would be redundant given
+                        # broad already covers it. Configurable rather than hardcoded to
+                        # `broad` so a full sepsis_strict comparison run stays one config
+                        # change away if a reviewer specifically asks for the
+                        # higher-specificity operationalization, without paying the
+                        # architectural cost of a 3rd head on every run. Phase 10 must
+                        # validate this is exactly "broad" or "strict" and raise clearly
+                        # otherwise -- never silently default or guess.
+  head_hidden_dim: 64   # hidden width of EACH task's independent MLP head (Linear -> ReLU ->
+                        # Dropout -> Linear). DECIDED 2026-08-30, confirmed with user:
+                        # independent small MLP heads per task, no shared bottleneck beyond
+                        # the GNN trunk itself -- see docs/multitask_heads.md and
+                        # src/heads/multitask_heads.py's module docstring for the alternatives
+                        # considered (plain linear probes; a shared bottleneck layer).
+  head_dropout: 0.1     # applied inside each head, between its two Linear layers -- matches
+                        # gnn.dropout's convention of a documented default rather than a bare
+                        # literal in code.
+
+training:
+  # FOUND 2026-08-30 (Phase 11): this stanza pre-dates any actual
+  # training loop and was stubbed for a CENTRALIZED training concept
+  # (one model, N global epochs, early-stopped against a held-out
+  # validation set). Phase 11 trains per-hospital LOCAL rounds instead
+  # (each hospital trains its own copy for a small number of epochs,
+  # then Phase 12/FedAvg averages the results) -- a materially
+  # different shape, same as the fusion.output_dim=256 and
+  # graph.max_nodes_full_similarity stale-config fixes before it (see
+  # IMPLEMENTATION_TRACKER.md). Kept rather than deleted, annotated
+  # rather than silently reused for something they don't mean:
+  batch_size: 32                 # NOT USED by Phase 11 -- each hospital's FULL patient set is one
+                                  # forward/backward pass (the GNN needs the whole hospital graph
+                                  # at once; no mini-batching within a hospital), same "no batching
+                                  # needed at this scale" reasoning already established for Phase
+                                  # 8/9/10's per-hospital forward passes. Left here for a possible
+                                  # future phase that revisits intra-hospital mini-batching.
+  max_epochs: 50                 # NOT USED by Phase 11 -- describes a centralized training loop's
+                                  # total epoch budget, not a federated local round's epoch count
+                                  # (see local_epochs below). Likely relevant again once an
+                                  # `evaluation` phase (see the evaluation: stanza below, also not
+                                  # yet implemented) introduces rounds + a validation split.
+  early_stopping_patience: 5     # NOT USED by Phase 11 -- no train/val split exists anywhere in
+                                  # this project yet (every phase so far uses the full eligible
+                                  # cohort), so there is nothing to early-stop against. Deferred to
+                                  # a future evaluation phase, not silently built here as a
+                                  # side-effect of Phase 11 -- that would be a real methodology
+                                  # decision (how to split, at what granularity, per-hospital or
+                                  # global) that hasn't been discussed yet.
+  learning_rate: 0.001           # USED -- one composite Adam/SGD optimizer over ALL FOUR jointly-
+                                  # trained components (LSTM + autoencoder + GNN + heads) per
+                                  # hospital's local round. Directly reused as-is; already matched
+                                  # what Phase 11 needed.
+  weight_decay: 0.0001           # USED -- same composite optimizer as learning_rate above.
+  optimizer: adam                # USED -- adam | sgd.
+  local_epochs: 5                # USED -- epochs per hospital PER LOCAL ROUND (this phase only
+                                  # runs one round; Phase 12/FedAvg will call this repeatedly).
+                                  # Small by FL convention -- too many local epochs before
+                                  # averaging risks "client drift" from the shared global model,
+                                  # though there's no averaging step yet for that to bite this
+                                  # phase specifically.
+  reconstruction_weight: 0.5     # USED -- weight of the autoencoder's reconstruction MSE term in
+                                  # the combined loss (src/training/losses.py). DECIDED 2026-08-30,
+                                  # confirmed with user: include it -- the decoder was built
+                                  # anticipating exactly this (see
+                                  # src/modalities/tabular/autoencoder.py's own docstring).
+  max_hospitals: null            # USED -- null processes every hospital; set to a small int to
+                                  # bound sandbox/dev run time (e.g. verifying the mechanism on a
+                                  # handful of hospitals rather than all 208).
+
+evaluation:
+  metrics: [auroc, auprc, accuracy, precision, recall, f1]
+  calibration: true
+  bootstrap_ci: true
+  bootstrap_samples: 1000
+
+ablation:
+  # Research-grade ablation framework, added 2026-09-10 -- see
+  # IMPLEMENTATION_TRACKER.md's ablation-framework entry for the full
+  # design writeup and the numbered decisions confirmed with the user
+  # before building. Runs BEFORE federated learning (decision #8):
+  # split -> TS/TAB embeddings -> fusion -> this 72-config ablation ->
+  # graph/GNN -> graph-embedding ablation -> THEN Phase 11/12/13.
+  enabled: true
+  output_dir: outputs/ablation
+
+  split:
+    manifest_path: outputs/ablation/split_manifest.json
+    train_frac: 0.7
+    val_frac: 0.15
+    test_frac: 0.15
+    stratify_on: mortality        # mortality | sepsis | none -- see src/data/splitting/patient_split.py
+    # seed reuses run.seed -- one permanent manifest, reused by every
+    # downstream ablation experiment (decision #9), never silently
+    # regenerated (build_and_save_split_manifest() refuses to
+    # overwrite an existing manifest unless overwrite=True is passed
+    # explicitly).
+
+  # Section 1's grid: 4 TS x 3 TAB x 2 Fusion x 3 Classifiers = 72
+  # configs (decision #6 -- NOT multiplied by gnn_type or federated
+  # algorithm). Change any of these four lists to immediately change
+  # the experiment matrix -- no code change required (decision #12).
+  ts_models: [lstm, rnn, gru, transformer]
+  tab_models: [autoencoder, mlp, pca]
+  fusion_modes: [concatenation, cross_attention]      # concatenation = Before-CA (Phase 7, locked, unchanged); cross_attention = After-CA (new, src/fusion/cross_attention_fusion.py)
+  classifiers: [adaboost, xgboost ]
+
+  # Section 2's grid: one fixed representation source (the existing,
+  # locked default architecture's trained GNN output) x
+  # graph_classifiers x task -- NOT the 72-combo grid again.
+  graph_classifiers: [adaboost, xgboost ]
+
+  # `subset`: optional, config-only way to run a smaller slice of the
+  # grid without any code change (decision #12) -- e.g. a pilot run.
+  # Leave every key null/absent to run the FULL grid from the lists
+  # above. Any key present here overrides the corresponding full list.
+  subset: null
+  # subset:
+  #   combos: [{ts_model: lstm, tab_model: mlp, fusion_mode: concatenation}]
+  #   classifiers: [xgboost]
+  #   graph_classifiers: [xgboost]
+  #   tasks: [mortality]
+
+  # Per-hospital, train-split-only, non-federated encoder training for
+  # BOTH the 72-config ablation (src/training/flat_multimodal_model.py)
+  # AND the graph-embedding ablation's default-architecture encoder
+  # stage (decision #2: "locally trained representations," never
+  # FedAvg'd/FedProto'd -- this ablation study happens entirely before
+  # federated learning). Deliberately a SEPARATE stanza from
+  # `training:` above (Phase 11/12/13's own, graph-inclusive local
+  # training) -- same reasoning `training:` itself already documents
+  # for why it doesn't reuse `federated:`'s pre-Phase-12 stubs: a
+  # different training regime deserves its own explicit budget, not a
+  # silently-shared one that could drift the two apart unnoticed.
+  local_training:
+    epochs: 5
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    optimizer: adam
+    reconstruction_weight: 0.5    # only applies to tab_model=autoencoder combos
+    mortality_weight: 1.0
+    sepsis_weight: 1.0
+    loss_type: weighted_bce
+    max_hospitals: null           # null = every hospital; set to a small int for a pilot/dev run
+
+  cross_attention:
+    attn_dim: 128
+    num_heads: 4
+
+  pca:
+    n_components: 32              # per-hospital PCA embedding width -- see src/modalities/tabular/pca_encoder.py
+
+  # Config-driven, no hardcoded research thresholds (Section 30's
+  # standing rule) -- override any classifier's hyperparameters here;
+  # anything not listed falls back to
+  # src/classifiers/boosting_classifiers.py's DEFAULT_CLASSIFIER_PARAMS.
+  # classifier_params:
+  #   adaboost: {n_estimators: 100}
+  #   xgboost: {n_estimators: 200, max_depth: 4}
+  #   lightgbm: {n_estimators: 200, max_depth: -1}
+  classifier_params:
+    adaboost:
+      n_estimators: 100
+      learning_rate: 0.5        # softer per-stump contribution than sklearn's default of 1.0
+
+    xgboost:
+      n_estimators: 150
+      max_depth: 3               # shallower trees on embedding-width features
+      learning_rate: 0.05        # much lower than XGBoost's own default (0.3)
+      subsample: 0.8             # row bagging
+      colsample_bytree: 0.8      # column bagging
+      min_child_weight: 5        # require more evidence per split before growing
+      reg_alpha: 0.1             # mild L1
+      reg_lambda: 1.0            # mild L2
+      eval_metric: logloss
+      random_state: 0
+
+    # lightgbm:
+    #   n_estimators: 150
+    #   max_depth: 5
+    #   num_leaves: 15              # LightGBM's actual binding complexity control -- keep it < 2^max_depth
+    #   learning_rate: 0.05
+    #   subsample: 0.8
+    #   subsample_freq: 1           # REQUIRED -- subsample is silently ignored in LightGBM's sklearn API without this
+    #   colsample_bytree: 0.8
+    #   min_child_samples: 30
+    #   reg_alpha: 0.1
+    #   reg_lambda: 1.0
+    #   verbosity: -1
+    #   random_state: 0
+
+  # Class-imbalance sampling comparison (confirmed with the user
+  # 2026-09-20) -- see src/classifiers/imbalance_sampling.py and
+  # src/ablation/sampling_comparison_runner.py. Compares no_sampling
+  # (reproduction check against the existing master_results.csv rows)
+  # vs. hospital-wise, train-only random undersample/oversample on the
+  # existing 48 non-PCA combos. `classifier_params` above is reused
+  # UNCHANGED for every sampling arm (confirmed with the user -- the
+  # sampling RATIO is what's tuned here, not the classifier's own
+  # hyperparameters). Candidate ratios are a small, explicit,
+  # config-driven grid (Section 30's standing rule: no hardcoded
+  # research thresholds) rather than a single default -- "best,
+  # efficient, research-grade... not default" per the user's own
+  # framing; widen this list if a wider search is ever wanted, no code
+  # change required.
+  sampling:
+    seed: 42
+    candidate_undersample_ratios: [0.5, 0.75, 1.0]   # minority:majority after resampling
+    candidate_oversample_ratios: [0.5, 0.75, 1.0]    # minority:majority after resampling
+    embeddings_cache_dir: outputs/ablation/embeddings_cache   # SHARED cache, keyed by combo_id -- read/written by
+                                                                # embedding_ablation, sampling_comparison, AND
+                                                                # graph_comparison alike (as of 2026-09-29); one-time
+                                                                # cost per combo regardless of which step trains it
+                                                                # first -- see get_or_build_combo_embeddings()'s
+                                                                # docstring in src/ablation/embedding_ablation_runner.py
+    # Set this to the real master_results.csv from the original
+    # 48-config ablation before running sampling_comparison for real
+    # (confirmed with the user 2026-09-23) -- e.g. the path this
+    # engagement's real run wrote it to, such as
+    # outputs/ablation/run_<your_original_run_id>/master_results.csv.
+    # run_ablation.py loads it via csv.DictReader and gates the whole
+    # step on it (see sampling_comparison_runner.py's module docstring
+    # -- "GATING BEHAVIOR"): every no_sampling reproduction check must
+    # match before ANY undersample/oversample work happens. Left unset
+    # here deliberately (never a real path in version control) --
+    # run_ablation.py logs a clear warning and skips the check (not a
+    # hard error) if this key is absent or the file doesn't exist.
+    reference_master_results_csv: outputs/ablation/full_run/master_results.csv
+
+    # Which strategies actually run (added 2026-10-03, after the real-
+    # data finding that random undersample/oversample underperform
+    # no_sampling on most combos, and the no-synthetic-data rule was
+    # explicitly revisited and lifted for this phase -- see
+    # imbalance_sampling.py's module docstring "UPDATE" note).
+    # "adasyn"/"enn"/"adasyn_enn" are opt-in, NOT in this default list,
+    # so an existing run without this key behaves exactly as before.
+    # Requires the imbalanced-learn package (see requirements.txt).
+    strategies: [undersample, oversample, adasyn, enn, adasyn_enn]
+    # strategies: [undersample, oversample, adasyn, enn, adasyn_enn]
+    candidate_adasyn_ratios: [0.5, 0.75, 1.0]   # same meaning as the two lists above, ADASYN's own sampling_strategy target
+    enn_n_neighbors: 3                           # small on purpose -- real hospitals range down to very few patients (Phase 8's confirmed min=0)
+
+  # Graph A vs Graph B comparison (confirmed with the user 2026-09-23),
+  # run AFTER the best flat configuration is selected from the real
+  # sampling comparison above -- see
+  # src/ablation/graph_comparison_runner.py's module docstring.
+  # Graph A and Graph B share EVERY setting below (k, cosine_threshold,
+  # gnn, heads, training) -- the only intended difference is the
+  # candidate-generation strategy itself (knn_and_threshold vs.
+  # minibatch_kmeans_and_threshold). Downstream predictor is the GNN's
+  # own fully-connected multitask head, trained end-to-end -- NEVER a
+  # separate boosted-tree classifier (corrected 2026-09-23).
+  graph_comparison:
+    best_flat_config: {'ts_model':transformer, 'tab_model':autoencoder, 'fusion_mode':cross_attention}  # {ts_model, tab_model, fusion_mode} of the real winner -- set this
+                              # from sampling_results.csv before running (see
+                              # select_best_flat_config_from_sampling_results()); left null
+                              # deliberately -- run_ablation.py raises clearly if unset.
+    graph:
+      k: 5
+      cosine_threshold: 0.6      # AND with k-NN, both Graph A and Graph B (confirmed with the user)
+      n_clusters: 10              # Graph B only -- ignored for Graph A
+      cluster_seed: 42             # Graph B only
+    gnn:
+      type: graphsage
+      hidden_dim: 128
+      layers: 2
+      dropout: 0.2
+    heads:
+      hidden_dim: 64
+      dropout: 0.1
+    training:
+      epochs: 10
+      learning_rate: 0.001
+      mortality_weight: 1.0
+      sepsis_weight: 1.0
+      loss: weighted_bce
+      seed: 42

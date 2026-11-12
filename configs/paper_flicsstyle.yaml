@@ -1,0 +1,29 @@
+# FLICS-SCALE replication on real eICU hospitals (optional; not run yet). FLICS (2026) evaluates FedAvg LR/LSTM on 3 hospitals (5,000 stays) and 10 hospitals
+# (53,500 stays). Its hospital tables do not match real eICU hospitals (see docs/paper_track_v14.md), so exact replication is impossible. This config trains and
+# evaluates on the 3 and 10 LARGEST real hospitals of the strict 24 h cohort, with the same arms side by side on identical test patients, so methods can be
+# compared with paired tests instead of against a reference number whose own interval is +-0.035.
+#
+# NOT reproduced: ICU-discharge mortality (we predict in-hospital mortality; scripts/paper_label_variant_check.py measures the label effect), FLICS's whole-stay
+# feature summaries and vital-sign inputs, its differential-privacy noise, its 1,000-patient test set (ours is every test patient of those hospitals).
+#
+#   python run_paper.py --config configs/paper_flicsstyle.yaml --reuse-phase1to3 --run-id flicsstyle_top3 --set paper.cohort_filter.min_hospital_patients=3758
+#   python run_paper.py --config configs/paper_flicsstyle.yaml --reuse-phase1to3 --run-id flicsstyle_top10 --set paper.cohort_filter.min_hospital_patients=2699
+#
+# 3758 / 2699 are the sizes of the 3rd / 10th largest hospital in the strict cohort (scripts/paper_hospital_size_probe.py --config configs/paper_fedgbdt.yaml shows the table).
+# Keep `window` identical to the final strict run: the feature-bundle cache key hashes it together with `sequence` and `features`.
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  window: {min_icu_los_minutes: 1440}
+  tasks:
+    mortality: [no_apache_scores]
+    sepsis: []
+  neural: {use_sequence: false}
+  federated: {lr: 0.001, local_epochs: 2, fedprox_mu: 1.0, rounds: 100, patience: 15}
+  arms: {logreg_central: true, lightgbm_central: true, mlp_central: true, mlp_local_only: true, fedavg_logreg: true, fedavg_mlp: true, fedavg_graph: false, fed_gbdt: true}
+  seeds: [42, 43, 44]

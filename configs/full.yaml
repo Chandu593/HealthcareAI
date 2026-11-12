@@ -1,0 +1,14 @@
+# Full mode: all eligible hospitals and patients. Final experiments only --
+# this will be slow and memory-intensive given lab.csv alone is ~2.9GB.
+
+run:
+  mode: full
+
+cohort:
+  patient_subset: null
+
+federated:
+  mode: all
+  hospitals: []
+  rounds: 30
+  local_epochs: 2

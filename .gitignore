@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+env/
+ENV/
+
+# Generated run artifacts
+cache/*
+!cache/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+outputs/*
+!outputs/.gitkeep
+figures/*
+!figures/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Local datasets
+data/*.csv
+data/*.csv.gz
+data/**/*.csv
+data/**/*.csv.gz
+data/**/*.parquet
+
+# Secrets and packaging artifacts
+.env
+*.egg-info/
+build/
+dist/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.log

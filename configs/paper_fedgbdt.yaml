@@ -1,0 +1,26 @@
+# Federated histogram GBDT on the STRICT 24 h landmark cohort (the headline protocol), against pooled LightGBM on the same split and seeds.
+#
+# IMPORTANT: do not add `window:` keys other than min_icu_los_minutes, and do not touch `sequence:` or `features:`. The feature-bundle cache key
+# hashes those stanzas; keeping them identical to the final strict run (final_mortality_strict) re-uses its cached bundle instead of rebuilding it.
+#
+#   python run_paper.py --config configs/paper_fedgbdt.yaml --reuse-phase1to3 --run-id fedgbdt_strict --seeds 42 --set paper.fed_gbdt.n_trials=1
+#   (smoke run: one seed, the configured `fixed` params only, ~15 min)
+#   python run_paper.py --config configs/paper_fedgbdt.yaml --reuse-phase1to3 --run-id fedgbdt_strict_final
+#   (3 seeds; the 4-trial validation search runs on the first seed only, later seeds re-use the winner)
+#
+# lightgbm_central is kept ON so the report carries paired comparisons and bootstrap CIs against the pooled upper bound. To save time, set it false
+# and compare against outputs/paper/final_mortality_strict (same split manifest, same seeds, same cohort).
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  window: {min_icu_los_minutes: 1440}
+  tasks:
+    mortality: [no_apache_scores]
+    sepsis: []
+  arms: {logreg_central: false, lightgbm_central: true, mlp_central: false, fedavg_mlp: false, fedavg_graph: false, fed_gbdt: true}
+  seeds: [42, 43, 44]

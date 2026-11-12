@@ -1,0 +1,17 @@
+# Sepsis EARLY-WARNING: features from only the first 6h; the label (antibiotic within -24h..+48h AND day-1 SOFA-like >= 2)
+# is largely determined AFTER the window, so this is a genuine forward-looking task. Controlled + uncontrolled both reported.
+#   python run_paper.py --config configs/paper_sepsis_early.yaml --reuse-phase1to3 --tasks sepsis --run-id sepsis_early6h
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  window: {minutes: 360}
+  sequence: {bin_minutes: 60}       # 6 hourly bins
+  tasks:
+    mortality: []
+    sepsis: [sepsis_uncontrolled, sepsis_controlled, sepsis_deconfounded, sepsis_no_hospital, sepsis_clean, sepsis_no_labs]
+  seeds: [42]

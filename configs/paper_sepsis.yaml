@@ -1,0 +1,15 @@
+# Sepsis, 24h window. `sepsis_controlled` removes every label ingredient (the honest number);
+# `sepsis_uncontrolled` keeps them and is run ONLY to measure how much of the score is label reconstruction.
+#   python run_paper.py --config configs/paper_sepsis.yaml --reuse-phase1to3 --tasks sepsis --run-id sepsis24
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  tasks:
+    mortality: []
+    sepsis: [sepsis_uncontrolled, sepsis_controlled, sepsis_deconfounded, sepsis_no_hospital, sepsis_clean, sepsis_no_labs]
+  seeds: [42]

@@ -1,0 +1,20 @@
+# Subset mode: moderate hospital/patient subset for actual experimentation
+# ahead of a full run. Hospital IDs below are PLACEHOLDERS -- replace with
+# real hospitalid values once EICU_DATA_ROOT is set and Phase 1 discovery
+# has reported which hospitals are actually present / eligible.
+
+run:
+  mode: subset
+
+cohort:
+  patient_subset: 500
+
+federated:
+  mode: subset
+  hospitals: [73, 92, 384]   # NOTE (2026-09-11): the 2026-09-10 pilot found hospital 147 is NOT
+                              # eligible in the real dataset (only 73 and 92 were used, giving a
+                              # 2-hospital pilot instead of 3). For the split-aware validation run,
+                              # please swap 147 for a real third eligible hospital ID from
+                              # outputs/data_reports/'s hospital eligibility table before running.
+  rounds: 20
+  local_epochs: 2

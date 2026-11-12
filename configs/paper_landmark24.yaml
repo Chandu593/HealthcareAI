@@ -1,0 +1,18 @@
+# Strict landmark sensitivity: only ICU stays that last the FULL 24h window (every patient observed for the same 24h).
+# Removes the "window truncated => short stay" signal. Run central models first (fast) to see how much of the all-stays
+# performance survives. If it stays high, this becomes the primary, reviewer-proof cohort.
+#   python run_paper.py --config configs/paper_landmark24.yaml --reuse-phase1to3 --run-id landmark24
+run:
+  mode: full
+cohort:
+  patient_subset: null
+federated:
+  mode: all
+  hospitals: []
+paper:
+  window: {min_icu_los_minutes: 1440}
+  tasks:
+    mortality: [no_apache_scores, no_apache_no_eol]
+    sepsis: []
+  arms: {logreg_central: true, lightgbm_central: true, mlp_central: false, fedavg_mlp: false, fedavg_graph: false}
+  seeds: [42]

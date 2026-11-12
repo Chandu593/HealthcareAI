@@ -1,0 +1,40 @@
+# Paper track (run_paper.py). Full eICU cohort, first-24h window, leakage-safe features,
+# tuned centralized references + FedAvg multimodal model + per-hospital graph heads.
+# Reuses the permanent split manifest at ablation.split.manifest_path, so every number is on
+# exactly the same patients as the earlier ablation runs.
+#
+#   python run_paper.py --config configs/paper.yaml --reuse-phase1to3
+#
+# Anything under `paper:` overrides src/paper/config.py's PAPER_DEFAULTS (deep-merged).
+
+run:
+  mode: full
+
+cohort:
+  patient_subset: null
+
+federated:
+  mode: all
+  hospitals: []
+
+paper:
+  window:
+    minutes: 1440              # first 24h (clipped at ICU discharge). Set min_icu_los_minutes: 1440 for the strict landmark sensitivity run.
+    lookback_minutes: 1440
+    min_icu_los_minutes: 0
+  features:
+    include_apache_scores: true   # APACHE-derived day-1 scores as INPUTS; the `no_apache_scores` feature set reports the same models without them
+  tasks:
+    mortality: [full, no_apache_scores, no_apache_no_eol]   # pick one per run with --feature-sets
+    sepsis: [sepsis_controlled, sepsis_deconfounded, sepsis_no_hospital, sepsis_clean, sepsis_no_labs]   # ladder; pick with --feature-sets (sepsis_uncontrolled is in paper_sepsis*.yaml)
+  seeds: [42]                    # first run: one seed. For the final table use [42, 43, 44] (mean +/- sd) -- ~3x the time
+  lightgbm:
+    n_trials: 16
+  federated:
+    rounds: 40
+    local_epochs: 5
+    batch_size: 128
+    lr: 0.003
+    fedprox_mu: 0.0              # try 0.01 if hospitals drift (strong non-IID)
+  arms:
+    mlp_local_only: false        # per-hospital models never averaged; slow but a standard FL baseline -- enable for the final table

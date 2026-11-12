@@ -1,0 +1,20 @@
+# Debug mode: tiny subset, verifies the complete pipeline runs end-to-end
+# quickly. Not for real experimentation -- see subset.yaml / full.yaml.
+
+run:
+  mode: debug
+
+cohort:
+  patient_subset: 20         # cap per hospital
+
+federated:
+  mode: subset
+  hospitals: []               # [] under debug = "use whatever hospitals discovery finds"
+  rounds: 2
+  local_epochs: 1
+
+training:
+  max_epochs: 2
+
+graph:
+  k: 3

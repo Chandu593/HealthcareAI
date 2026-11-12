@@ -1,0 +1,21 @@
+run:
+  mode: full
+
+cohort:
+  patient_subset: null
+
+federated:
+  mode: all
+  hospitals: []
+  rounds: 30
+  local_epochs: 2
+
+ablation:
+  subset:
+    combos:
+      - {ts_model: lstm, tab_model: autoencoder, fusion_mode: concatenation}
+      - {ts_model: lstm, tab_model: autoencoder, fusion_mode: cross_attention}
+      - {ts_model: lstm, tab_model: mlp, fusion_mode: concatenation}
+      - {ts_model: lstm, tab_model: mlp, fusion_mode: cross_attention}
+      # - {ts_model: lstm, tab_model: pca, fusion_mode: concatenation}
+      # - {ts_model: lstm, tab_model: pca, fusion_mode: cross_attention}

@@ -1,0 +1,78 @@
+# Three-modality suite (run_three_modality.py). Layered on base.yaml like every other config.
+# Stage 1: the INCIDENT sepsis-proxy label (fixed ICU-hour 24-96 event window, time-resolved evidence).
+#
+#   python run_three_modality.py --config configs/three_modality.yaml --stage incident_label
+#   python run_three_modality.py --config configs/three_modality.yaml --stage incident_label --inspect-cache
+#   python run_three_modality.py --config configs/three_modality.yaml --stage incident_label --force-recompute
+#   python run_three_modality.py --config configs/three_modality.yaml --stage incident_label --set three_modality.incident_sepsis.followup.censoring_policy=require_full_followup_all
+#
+#   python run_three_modality.py --config configs/three_modality.yaml --stage tcd_features     # stage 2: ONE unified TCD feature vector per patient (first 24 ICU h)
+#   python run_three_modality.py --config configs/three_modality.yaml --stage tcd_encoder      # stage 2: MLP encoder -> ONE embedding per patient (needs torch + a completed incident_label run)
+#
+#   python run_three_modality.py --config configs/three_modality.yaml --stage gru_inputs       # stage 3a: fresh 24 x 1-hour value+mask sequences (first 24 ICU h only)
+#   python run_three_modality.py --config configs/three_modality.yaml --stage gru_encoder      # stage 3a: pooled focal multitask GRU -> ONE embedding per patient (needs torch)
+#
+#   python run_three_modality.py --config configs/three_modality.yaml --stage tabular_inputs   # stage 3b: clean static feature set (no APACHE scores, no labs), train-only preprocessing
+#   python run_three_modality.py --config configs/three_modality.yaml --stage tabular_ae       # stage 3b: autoencoder (reconstruction + focal heads), pooled -> ONE 64-d embedding (needs torch)
+#
+# Reuses the PERMANENT split manifest (ablation.split.manifest_path); it never builds or modifies a manifest.
+# Everything is written under <run.output_dir>/three_modality/ -- never into outputs/paper, outputs/ablation or the legacy label files.
+# Anything under `three_modality:` overrides src/three_modality/config.py's THREE_MODALITY_DEFAULTS (deep-merged).
+
+run:
+  mode: full
+
+cohort:
+  patient_subset: null
+
+federated:
+  mode: all
+  hospitals: []
+
+three_modality:
+  incident_sepsis:
+    cutoff_hours: 24               # observation window = first 24 ICU hours (model inputs)
+    horizon_end_hours: 96          # incident-event window = hours 24-96
+    co_occurrence_window_hours: 24
+    infection:
+      evidence: antibiotic         # antibiotic_plus_culture = sensitivity variant (microLab is ~1.5% dense in eICU)
+    followup:
+      # alive_discharge_as_negative = PRIMARY; require_full_followup_all = complete-follow-up sensitivity; exclude_censored = additional sensitivity
+      censoring_policy: alive_discharge_as_negative
+
+  # --- stage 2 (TCD). Everything not listed keeps its default from src/three_modality/config.py THREE_MODALITY_DEFAULTS["tcd"]. window_minutes MUST equal cutoff_hours*60. ---
+  tcd:
+    window_minutes: 1440
+    encoder: {hidden_dim: 128, embedding_dim: 64, dropout: 0.1}
+    training: {gamma: 2.0, alpha: 0.25, mortality_weight: 1.0, sepsis_weight: 1.0, lr: 0.001, max_epochs: 30, patience: 5, seed: 42, landmark_only: true}   # landmark_only: train/early-stop only on patients still in the ICU at hour 24
+    audit: {n_patients: 2000}        # real-data poison audit of the temporal cutoff; 0 disables
+
+  # --- stage 3a (GRU). n_bins * bin_minutes MUST equal tcd.window_minutes. Separate focal alpha/gamma and weights per task. Training is POOLED (central), not federated. ---
+  gru:
+    bin_minutes: 60
+    n_bins: 24
+    encoder: {hidden_dim: 128, num_layers: 2, dropout: 0.2}
+    training:
+      focal: {mortality: {alpha: 0.25, gamma: 2.0}, sepsis: {alpha: 0.25, gamma: 2.0}}
+      task_weights: {mortality: 1.0, sepsis: 1.0}
+      lr: 0.001
+      batch_size: 512
+      max_epochs: 25
+      patience: 4
+      seed: 42
+      landmark_only: true
+    audit: {n_patients: 2000}
+
+  # --- stage 3b (tabular autoencoder). Pooled training. Reconstruction (unsupervised) and focal (supervised) objectives are separate and separately weighted. ---
+  tabular:
+    encoder: {hidden_dim: 128, embedding_dim: 64, dropout: 0.1}
+    training:
+      focal: {mortality: {alpha: 0.25, gamma: 2.0}, sepsis: {alpha: 0.25, gamma: 2.0}}
+      task_weights: {mortality: 1.0, sepsis: 1.0}
+      reconstruction_weight: 1.0
+      lr: 0.001
+      batch_size: 1024
+      max_epochs: 40
+      patience: 5
+      seed: 42
+      landmark_only: true
