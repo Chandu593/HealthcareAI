@@ -64,6 +64,13 @@ Round state (global parameters, server moments, SCAFFOLD controls, personalised 
 per (round, client), so `--resume-existing-run --run-id <id>` reproduces the uninterrupted run (identity checked; completed runs are never resumed or overwritten). FedGBDT is a single call: a finished model is
 reloaded, an interrupted boosting run restarts from round 0.
 
+## Hospitals with an empty split (fixed in s10)
+A hospital can have no patients in a split after the 70/15/15 split. Zero test patients: the hospital still trains (it is a client), is reported `skipped: no test patients`, and has no predictions.
+Zero validation patients: it still trains and contributes to the federation, no validation histogram entry is sent, and it is evaluated with the global federated-histogram threshold
+(`threshold_source = global_federated_validation_histogram`, no recall-target point). Before s10, zero test patients crashed Config 4's embedding step and zero validation patients silently dropped
+the hospital under a misleading `graph construction failed` reason (also for LR / MLP). Now only the GCN family can drop a client (a genuine graph-construction failure, reported with its reason);
+an LR / MLP construction error is raised.
+
 ## Known limitations (state them in any write-up)
 * Centrally pretrained, supervised encoders: not end-to-end FL; embeddings in-sample for the encoders' labels.
 * FedGBDT ≠ focal LightGBM / standard GBDT (loss differs). FedGBDT's boosting loop is not resumable mid-run.

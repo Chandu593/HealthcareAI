@@ -48,8 +48,12 @@ class FLClient:
         return int(self.Z["train"].shape[1])
 
     def scaled(self, split: str) -> np.ndarray:
-        """Hospital-local standardisation (scaler fitted on this client's training rows only), float32."""
-        return self.scaler.transform(self.Z[split]).astype(np.float32)
+        """Hospital-local standardisation (scaler fitted on this client's training rows only), float32. A hospital can have NO patients in a split (e.g. zero test or zero validation
+        patients after the 70/15/15 split): that split is an empty (0, d) array -- sklearn would raise on it."""
+        Z = self.Z[split]
+        if Z.shape[0] == 0:
+            return np.empty((0, Z.shape[1]), dtype=np.float32)
+        return self.scaler.transform(Z).astype(np.float32)
 
     def with_features(self, Z: dict) -> "FLClient":
         """A new client over different input features (Config 4: the GCN's hospital-local node embeddings). Labels, patient ids and counts are unchanged; the scaler is REFITTED on the new

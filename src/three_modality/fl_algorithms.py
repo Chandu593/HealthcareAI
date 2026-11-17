@@ -140,7 +140,12 @@ class ClientProblem:
     def _query_graph(self, split: str):
         """Train graph + the split's patients attached inductively (directed train -> query edges, no query-query edges). Built once per split and cached."""
         if split not in self._q:
-            src, dst, w = attach_edges(self.tg, self.client.Z[split])
+            Zq = self.client.Z[split]
+            if Zq.shape[0]:
+                src, dst, w = attach_edges(self.tg, Zq)
+            else:                                                      # no patients in this split: the query graph is the training graph itself
+                src = dst = np.empty(0, np.int64)
+                w = np.empty(0, np.float32)
             ei, ew = _edge_tensors(self.tg, src, dst, w)
             self._q[split] = (torch.cat([self._x["train"], self.x(split)]), ei, ew, int(len(src)))
         return self._q[split]
@@ -186,6 +191,9 @@ def make_problems(clients: list, family: str, ds_cfg: dict, graph_key=None, smot
     """ClientProblem per client; a client whose hospital-local graph cannot be built is excluded and REPORTED (never dropped silently)."""
     problems, failed = {}, []
     for c in clients:
+        if family != "gcn":                       # nothing can legitimately fail for LR / MLP: a construction error is a bug and must be loud, never a silently dropped client
+            problems[c.hospitalid] = ClientProblem(c, family, ds_cfg, graph_key, smote)
+            continue
         try:
             problems[c.hospitalid] = ClientProblem(c, family, ds_cfg, graph_key, smote)
         except Exception as exc:                  # noqa: BLE001
